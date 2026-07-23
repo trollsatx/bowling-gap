@@ -305,18 +305,25 @@ function patternSummary(p) {
 // Kegel KOSI (.txt) import — experimental
 //
 // The KOSI export is an undocumented, unlabeled positional dump: one raw
-// value per line, grouped into blocks of 8 (one per machine pass) separated
-// by blank filler lines. It encodes what the lane machine executes — board
-// targets, load counts, mic/speed/buff settings, tank letter — but NOT the
-// derived analytics Kegel prints on the pattern sheet (Ratio, Volume, T.OIL).
-// Those are computed by Kegel's own software from an oil-deposition model
-// we don't have, so we don't attempt to reproduce them exactly.
+// value per line, grouped into blocks (row counts vary per pattern, 7-8 is
+// typical) separated by blank filler lines. It encodes what the lane machine
+// executes — board targets, load counts, mic/speed/buff settings — but NOT
+// the derived analytics Kegel prints on the pattern sheet (Ratio, Volume,
+// T.OIL). Those are computed by Kegel's own software from an oil-deposition
+// model we don't have, so we don't attempt to reproduce them exactly.
 //
-// What's extracted here was verified by cross-referencing a single sample
-// export against its printed pattern sheet — high confidence on distance
-// and tank count (each confirmed two independent ways), low confidence
-// (clearly labeled as an estimate) on ratio/wall board, which are inferred
-// from raw load counts rather than actual oil volume.
+// Verified against 3 real exports (Route 66 V2, Broadway V2, plus the
+// original sample). Two consistent findings from that set:
+//  - The FIRST block after the name is always file-header metadata (fixed
+//    flags, then a redundant copy of the total distance + forward board
+//    list), and the LAST block is footer telemetry (flow/volume settings,
+//    values in the hundreds/thousands). Neither is pass data; both are
+//    excluded from board/load classification below so their large numbers
+//    can't get mistaken for board targets.
+//  - None of the 3 samples encode a tank letter or conditioner name as
+//    plain-word tokens — that path may only fire on other export variants.
+//    Distance is the one field consistently confirmed two independent ways
+//    (the header's redundant copy vs. the precise per-pass distance table).
 // ---------------------------------------------------------------------------
 
 function parseKosiText(text) {
@@ -341,15 +348,20 @@ function parseKosiText(text) {
   // Row counts vary per pattern (a table might have 6-8 passes, not always 8),
   // so blocks are classified by content shape, not a fixed length. A minimum
   // of 2 filters out stray single leftover values without excluding real
-  // short tables.
+  // short tables. The first and last blocks are file header/footer metadata
+  // (see comment above parseKosiText) and are excluded from board/load/tank
+  // classification, since their large telemetry values (hundreds/thousands)
+  // would otherwise get mistaken for board numbers — but NOT from distance
+  // detection, which is decimal-fingerprinted and our highest-confidence field.
   const boardTokenBlocks = [];  // e.g. "2L","9L",... in table row order
   const boardNumBlocks = [];    // fallback: bare board numbers, no L/R suffix
   const loadsBlocks = [];
   const tankBlocks = [];
   const preciseDistBlocks = []; // decimal per-row stop distances (feet)
   let condCandidate = null;     // first adjacent pair of word tokens found in any block
+  const MAX_LANE_BOARD = 40;    // a lane is ~39 boards wide; bounds the board-number fallback
 
-  for (const b of blocks) {
+  blocks.forEach((b, bi) => {
     if (!condCandidate) {
       for (let i = 0; i < b.length - 1; i++) {
         if (/^[A-Za-z]{2,}$/.test(b[i]) && /^[A-Za-z]{2,}$/.test(b[i + 1])) {
@@ -358,21 +370,23 @@ function parseKosiText(text) {
         }
       }
     }
-    if (b.length < 2) continue;
-    if (b.every(v => /^\d+[LR]$/i.test(v))) { boardTokenBlocks.push(b); continue; }
-    if (b.every(v => /^[A-Za-z]$/.test(v))) { tankBlocks.push(b); continue; }
+    if (b.length < 2) return;
+    const isEdgeBlock = bi === 0 || bi === blocks.length - 1; // header / footer metadata
+    if (!isEdgeBlock && b.every(v => /^\d+[LR]$/i.test(v))) { boardTokenBlocks.push(b); return; }
+    if (!isEdgeBlock && b.every(v => /^[A-Za-z]$/.test(v))) { tankBlocks.push(b); return; }
     if (b.every(v => /^-?\d+(\.\d+)?$/.test(v))) {
       const nums = b.map(Number);
       const hasDecimal = b.some(v => v.indexOf('.') !== -1);
-      if (hasDecimal) { preciseDistBlocks.push(nums); continue; }
+      if (hasDecimal) { preciseDistBlocks.push(nums); return; } // trusted even at the edges
+      if (isEdgeBlock) return;
       const allEqual = nums.every(n => n === nums[0]);
-      const maxVal = Math.max(...nums);
-      if (allEqual) continue; // constant MICS/BUFF-style setting block — not needed
-      if (maxVal <= 10) { loadsBlocks.push(nums); continue; }
-      if (maxVal <= 60) continue; // SPEED-style block — not needed
-      boardNumBlocks.push(nums);
+      if (allEqual) return; // constant MICS/BUFF-style setting block — not needed
+      const maxVal = Math.max(...nums), minVal = Math.min(...nums);
+      if (maxVal <= 10) { loadsBlocks.push(nums); return; }
+      if (minVal >= 1 && maxVal <= MAX_LANE_BOARD) { boardNumBlocks.push(nums); return; }
+      // outside board range (SPEED/MIC settings or stray telemetry) — not needed
     }
-  }
+  });
 
   if (preciseDistBlocks.length === 0) {
     throw new Error("Couldn't find a distance table in this file — it may not be a Kegel KOSI export.");
@@ -382,6 +396,7 @@ function parseKosiText(text) {
 
   const distinctTanks = new Set();
   tankBlocks.forEach(b => b.forEach(v => distinctTanks.add(v.toUpperCase())));
+  const tankDetected = distinctTanks.size > 0;
   let tank = distinctTanks.size > 1 ? 'dual' : 'single';
 
   // Conditioner names (Fire/Ice/etc.) appear as plain words when the pattern
@@ -398,6 +413,9 @@ function parseKosiText(text) {
   }
 
   const warnings = [];
+  if (!tankDetected && tank === 'single') {
+    warnings.push("No tank letter found in this file — defaulted to single tank; verify against the printed sheet.");
+  }
   let ratioEstimate = null, wallBoardEstimate = null;
   const boardSets = boardTokenBlocks.length >= 3 ? boardTokenBlocks : boardNumBlocks;
   const fwdBoards = boardSets[0], revBoards = boardSets[2];
@@ -425,7 +443,7 @@ function parseKosiText(text) {
     warnings.push("Couldn't isolate load-count tables — ratio and wall board weren't estimated.");
   }
 
-  return { name, distanceFt, tank, cond1, cond2, ratioEstimate, wallBoardEstimate, warnings };
+  return { name, distanceFt, tank, tankDetected, cond1, cond2, ratioEstimate, wallBoardEstimate, warnings };
 }
 
 function bandColors(hue) {
@@ -682,7 +700,7 @@ function renderKosiImportCard() {
       <div class="kosi-summary">
         <div class="kosi-summary-row"><span>Pattern name</span><b>${esc(r.name)}</b></div>
         <div class="kosi-summary-row"><span>Distance <span class="kosi-confidence">(read from file)</span></span><b>${r.distanceFt} ft</b></div>
-        <div class="kosi-summary-row"><span>Tank <span class="kosi-confidence">(read from file)</span></span><b>${r.tank === 'dual' ? 'Dual tank' : 'Single tank'}</b></div>
+        <div class="kosi-summary-row"><span>Tank <span class="kosi-confidence">${r.tankDetected ? '(read from file)' : '(defaulted — not found in file)'}</span></span><b>${r.tank === 'dual' ? 'Dual tank' : 'Single tank'}</b></div>
         ${r.cond1 ? `<div class="kosi-summary-row"><span>Conditioner${r.cond2 ? 's' : ''} <span class="kosi-confidence">(read from file)</span></span><b>${esc(r.cond1)}${r.cond2 ? ' + ' + esc(r.cond2) : ''}</b></div>` : ''}
         <div class="kosi-summary-row"><span>Ratio <span class="kosi-confidence">(estimated from load counts)</span></span><b>${r.ratioEstimate != null ? r.ratioEstimate + ':1' : '—'}</b></div>
         <div class="kosi-summary-row"><span>Wall board <span class="kosi-confidence">(estimated from load counts)</span></span><b>${r.wallBoardEstimate != null ? r.wallBoardEstimate : '—'}</b></div>
@@ -694,7 +712,7 @@ function renderKosiImportCard() {
       </div>
   ` : (kosiParseError ? `<div class="kosi-error">${esc(kosiParseError)}</div>
       <div class="dialog-actions" style="margin-top:8.4px;"><button class="btn btn-secondary" data-action="kosi-dismiss">Dismiss</button></div>` : `
-      <div class="text-muted" style="font-size:12.5px;">Import a Kegel Pattern Library KOSI export (.txt). Experimental — distance and tank are read directly from the file; ratio and wall board are rough estimates. <a href="https://patternlibrary.kegel.net" target="_blank" rel="noopener">patternlibrary.kegel.net</a></div>
+      <div class="text-muted" style="font-size:12.5px;">Import a Kegel Pattern Library KOSI export (.txt). Experimental — distance is read directly from the file; tank defaults to single unless a tank letter is found; ratio and wall board are rough estimates. <a href="https://patternlibrary.kegel.net" target="_blank" rel="noopener">patternlibrary.kegel.net</a></div>
       <button class="btn btn-secondary" style="margin-top:8.4px;" data-action="kosi-file-trigger">Choose KOSI .txt file</button>
   `);
   return `
