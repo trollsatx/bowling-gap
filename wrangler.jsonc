@@ -9,7 +9,7 @@
   "workers_dev": true,
   "routes": [
     {
-      "pattern": "fit.joelms.me",
+      "pattern": "fit.joels.me",
       "custom_domain": true,
     },
   ],
