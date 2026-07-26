@@ -158,20 +158,37 @@ const PRESETS = {
 const PT_LABELS = { house: 'House Shot', sport_short: 'Sport Short', sport_long: 'Sport Long', challenge: 'Challenge Pattern' };
 const STYLE_LABELS = { stroker: 'Stroker', tweener: 'Tweener', power_player: 'Power player', cranker: 'Cranker' };
 
-const BALL_DEFAULTS = { name: '', rg: 2.50, diff: 0.040, asym: false, psa: 0.010, cover: 'solid', finish: 'matte', grit: 2000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 };
+const BALL_DEFAULTS = { name: '', rg: 2.50, diff: 0.040, asym: false, psa: 0.010, psaAngle: 0, cover: 'solid', coverGrade: 'reactive', finish: 'matte', grit: 2000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 };
 
 const SEED_ARSENAL = [
-  { id: 'seed1', name: 'Vengeance', rg: 2.49, diff: 0.052, asym: true, psa: 0.018, cover: 'solid', finish: 'polish', grit: 4000, ptp: 4.5, angle: 45, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 },
-  { id: 'seed2', name: 'HyRoad 40', rg: 2.53, diff: 0.037, asym: false, psa: 0, cover: 'pearl', finish: 'polish', grit: 4000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.375, massBiasToPap: 4.25 },
+  { id: 'seed1', name: 'Vengeance', rg: 2.49, diff: 0.052, asym: true, psa: 0.018, psaAngle: 0, cover: 'solid', coverGrade: 'reactive', finish: 'polish', grit: 4000, ptp: 4.5, angle: 45, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 },
+  { id: 'seed2', name: 'HyRoad 40', rg: 2.53, diff: 0.037, asym: false, psa: 0, psaAngle: 0, cover: 'pearl', coverGrade: 'reactive', finish: 'polish', grit: 4000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.375, massBiasToPap: 4.25 },
 ];
 
-const DEFAULT_PATTERN = { sheet_length: 44, sheet_ratio: 2.5, wall_board: 9, pattern_type: 'challenge', tank: 'single', cond1: 'Ice', cond2: 'None', condition: 'Fresh', launch_override: 19 };
+const DEFAULT_PATTERN = { sheet_length: 44, sheet_ratio: 2.5, wall_board: 9, pattern_type: 'challenge', tank: 'single', cond1: 'Ice', cond2: 'None', condition: 'Fresh', launch_override: 19, idealAngle: 90 };
 
 const BOWLER_DEFAULTS = { name: '', hand: 'right', pap_lateral: 4.5, pap_vertical: 0.5, speed: 16.5, rev_rate: 350, style: 'tweener', average: 200 };
 const SEED_BOWLERS = [{ ...BOWLER_DEFAULTS, id: 'bw1', name: 'Player 1' }];
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 function clamp01(v) { return clamp(v, 0, 1); }
+function toRadians(deg) { return deg * Math.PI / 180; }
+
+// Algorithm v4 constants (see docs/algorithm reference).
+const COVER_GRADE_MULT = { polyester: 0.10, entry_reactive: 0.30, reactive: 1.0 };
+const K_SPEED = 0.04; // initial constant per spec; no Stage 5 tuning loop implemented (see note above scoreBallAgainst)
+
+// v4 introduces `relativeSpeed` (-2..+2, 0 = baseline) but the app only records a
+// bowler's own ball speed in mph, not a per-delivery relative value — this maps one
+// to the other. 16.5 mph matches this app's own bowler-speed default, so a bowler
+// left at defaults scores as speed-neutral; ±1.75 mph per unit spans a realistic
+// stroker-to-cranker range (roughly 13-20 mph) across the full ±2 scale.
+const BASELINE_SPEED_MPH = 16.5;
+const SPEED_MPH_PER_UNIT = 1.75;
+function relativeSpeedFor(bowler) {
+  if (!bowler || bowler.speed == null) return 0;
+  return clamp((Number(bowler.speed) - BASELINE_SPEED_MPH) / SPEED_MPH_PER_UNIT, -2, 2);
+}
 
 function conditionerAvg(cond1, cond2, dual) {
   const c1 = CONDITIONERS[cond1] || CONDITIONERS.None;
@@ -180,7 +197,19 @@ function conditionerAvg(cond1, cond2, dual) {
   return { visc: (c1.visc + c2.visc) / 2, absorb: (c1.absorb + c2.absorb) / 2, bd: (c1.bd + c2.bd) / 2 };
 }
 
-function deriveStage1(p) {
+// ---------------------------------------------------------------------------
+// Scoring algorithm — v4 (see project algorithm reference doc for the full
+// derivation and formulas). Stages 1-4 (pattern derivation, lane condition,
+// the four scoring components, and the raw-sheet secondary score) are
+// implemented in full. Stage 5 (continuous calibration from a logged-session
+// history — launch-board line-fit, material-floor/symmetry/speed-constant
+// tuning) is NOT implemented: it requires a session log this app doesn't
+// have yet. Every Stage 5-dependent value uses the doc's own documented
+// cold-start fallback instead (see fittedLaunchBoard), so behavior matches
+// what a freshly-calibrated install of the full algorithm would show.
+// ---------------------------------------------------------------------------
+
+function deriveStage1(p, relativeSpeed) {
   const dual = p.tank === 'dual';
   const cAvg = conditionerAvg(p.cond1, p.cond2, dual);
   const tankBonus = dual ? 1.0 : 0.72;
@@ -191,7 +220,12 @@ function deriveStage1(p) {
   const wallShift = Math.round((1 - cAvg.visc) * 4 * (dual ? 0.3 : 1.0));
   const tightnessFactor = p.pattern_type === 'house' ? 1.0 : clamp(effRatio / 6, 0.55, 1.0);
   const effWall = Math.max(Math.round((Number(p.wall_board) + wallShift) * tightnessFactor), 3);
-  return { effLen, effRatio, effWall, bd: cAvg.bd };
+  // Speed-weighted breakdown: a slower-than-baseline bowler spends more time per
+  // pass on the same boards, accelerating local pattern breakdown; a faster bowler
+  // slows it. Replaces raw breakdownRate everywhere downstream (Stage 2).
+  const rs = relativeSpeed || 0;
+  const effectiveBreakdown = cAvg.bd * (1 + (0 - rs) * 0.15);
+  return { effLen, effRatio, effWall, bd: effectiveBreakdown };
 }
 
 function applyLaneCondition(base, condition) {
@@ -208,15 +242,33 @@ function applyLaneCondition(base, condition) {
   };
 }
 
-function scoreBallAgainst(ball, eff, pattern) {
+// Personal launch-board fit (Stage 5). The full version regresses confirmed launch
+// boards from logged sessions once at least 5 exist; this app doesn't yet have a
+// session log to regress against, so it always uses the documented cold-start
+// fallback (wall + 10) — the same behavior a fresh install of the full version
+// would show before any sessions were logged.
+function fittedLaunchBoard(wall) {
+  return wall + 10;
+}
+
+function scoreBallAgainst(ball, eff, pattern, relativeSpeed) {
+  const rs = relativeSpeed || 0;
   const rgNorm = (ball.rg - 2.45) / 0.20;
   const lenNorm = (eff.effLen - 26) / 28;
   const ratioNorm = clamp01((eff.effRatio - 1.5) / 10.5);
   const gritNorm = (ball.grit - 500) / 3500;
 
-  const surfaceShift = ball.finish === 'polish' ? 0.12 : -0.06;
+  // Speed-adjusted RG: a slower ball behaves like a lower-RG (earlier-transitioning)
+  // ball, a faster one like a higher-RG (later-transitioning) ball. Exponential so
+  // it never hard-clips at the extremes.
+  let adjustedRgNorm;
+  if (rs > 0) adjustedRgNorm = rgNorm + (1 - rgNorm) * (1 - Math.exp(-rs * K_SPEED));
+  else if (rs < 0) adjustedRgNorm = rgNorm * Math.exp(rs * K_SPEED);
+  else adjustedRgNorm = rgNorm;
+
+  const surfaceShift = (ball.finish === 'polish' ? 0.12 : -0.06) * (1 + (rgNorm - 0.5) * 0.6);
   const gritShift = gritNorm * 0.14;
-  const lengthScore = clamp01(1 - Math.abs(rgNorm - lenNorm) + surfaceShift + gritShift);
+  const lengthScore = clamp01(1 - Math.abs(adjustedRgNorm - lenNorm) + surfaceShift + gritShift);
 
   const patReadDemand = (1 - lenNorm) * 0.55 + (1 - ratioNorm) * 0.45;
   const coverBaseMap = { solid: 0.82, hybrid: 0.70, pearl: 0.55, particle: 0.90 };
@@ -224,45 +276,52 @@ function scoreBallAgainst(ball, eff, pattern) {
   const coreStrength = clamp01((ball.diff - 0.020) / 0.045);
   const effectiveCoverBase = coverBase + (coreStrength - 0.5) * 0.18 * (1 - coverBase);
   const matte = ball.finish === 'matte';
-  const ballReadEarly = (1 - gritNorm) * 0.40 + (matte ? 0.15 : -0.10) + (effectiveCoverBase - 0.55) * 0.35 + (1 - rgNorm) * 0.15;
+  const coverGradeMult = COVER_GRADE_MULT[ball.coverGrade] ?? COVER_GRADE_MULT.reactive;
+  const ballReadEarly = coverGradeMult * ((1 - gritNorm) * 0.40 + (matte ? 0.15 : -0.10) + (effectiveCoverBase - 0.55) * 0.35 + (1 - adjustedRgNorm) * 0.15);
   const surfaceScore = clamp01(1 - Math.abs(patReadDemand - ballReadEarly));
 
-  const launchBoard = pattern.launch_override ? Number(pattern.launch_override) : Math.min(eff.effWall + 10, 30);
+  const launchBoard = pattern.launch_override ? Number(pattern.launch_override) : fittedLaunchBoard(eff.effWall);
   const recovery = Math.max(launchBoard - eff.effWall, 1);
   const timingNeed = recovery > 15 ? 0.3 : recovery > 8 ? 0.5 : 0.8;
   const timingScore = clamp01(1 - Math.abs(timingNeed - (ball.ptp - 2.5) / 3.0));
   const effAngle = ball.layoutFormat === 'vls' ? clamp(20 + ((ball.pinBuffer ?? 3) - 1) * 12, 0, 70) : ball.angle;
   const shapeDemand = recovery / 20;
   const shapeScore = clamp01(1 - Math.abs(shapeDemand - (effAngle - 30) / 40));
-  const magScore = clamp01(Math.min(1, ball.diff / 0.06 + (ball.asym ? Math.min(1, ball.psa / 0.02) * 0.2 : 0)));
+  const floorScore = coverGradeMult * 0.15;
+  const rawMag = ball.diff / 0.06 + (ball.asym ? Math.min(1, ball.psa / 0.02) * 0.2 : 0);
+  const magScore = clamp01(Math.max(Math.min(1, rawMag), floorScore));
   const maxRecovery = ball.diff * 300 + (ball.asym ? ball.psa * 400 : 0) + effAngle * 0.3;
-  const capScore = clamp01(Math.min(1, maxRecovery / (recovery * 2)));
+  const rawCap = maxRecovery / (recovery * 2);
+  const capScore = clamp01(Math.max(Math.min(1, rawCap), floorScore));
   const surfPct = ball.finish === 'polish' ? 0.10 : (matte ? -0.05 : 0);
   const ptpFactor = (ball.ptp - 2.5) / 10;
   const rgFactor = (ball.rg - 2.45) / 2;
   const totalBoards = recovery;
   const outLeg = totalBoards * (0.5 + ptpFactor + rgFactor) * (1 + surfPct);
   const backLeg = totalBoards - outLeg + totalBoards * (ball.diff * 4 + (ball.asym ? ball.psa * 6 : 0));
-  const symScore = clamp01(1 - Math.abs(outLeg / Math.max(backLeg, 0.001) - 1.0) * 0.6);
+  const symScoreBase = 1 - Math.abs(outLeg / Math.max(backLeg, 0.001) - 1.0) * 0.6;
+  const directionalBias = ball.asym ? Math.cos(toRadians((ball.psaAngle || 0) - (pattern.idealAngle ?? 90))) * ball.psa * 0.5 : 0;
+  const symScore = clamp01(symScoreBase + directionalBias);
   const recoveryScore = (timingScore + shapeScore + magScore + capScore + symScore) / 5;
 
   const isSportLike = pattern.pattern_type !== 'house';
   let coreScore;
   if (!ball.asym && !isSportLike) coreScore = 0.80;
   else if (!ball.asym && isSportLike) coreScore = 0.67;
-  else if (ball.asym && !isSportLike) coreScore = 0.62;
-  else coreScore = 0.88;
+  else if (ball.asym && !isSportLike) coreScore = 0.55 + Math.min(0.15, (ball.psa / 0.020) * 0.15);
+  else coreScore = 0.65 + Math.min(0.23, (ball.psa / 0.020) * 0.23);
 
   const total = lengthScore * 25 + surfaceScore * 20 + recoveryScore * 30 + coreScore * 25;
   return { total, lengthScore, surfaceScore, recoveryScore, coreScore };
 }
 
-function fullScore(ball, pattern) {
-  const base = deriveStage1(pattern);
+function fullScore(ball, pattern, bowler) {
+  const relativeSpeed = relativeSpeedFor(bowler);
+  const base = deriveStage1(pattern, relativeSpeed);
   const eff = applyLaneCondition(base, pattern.condition);
-  const effResult = scoreBallAgainst(ball, eff, pattern);
+  const effResult = scoreBallAgainst(ball, eff, pattern, relativeSpeed);
   const sheetEff = { effLen: Number(pattern.sheet_length), effRatio: Number(pattern.sheet_ratio), effWall: Number(pattern.wall_board) };
-  const sheetResult = scoreBallAgainst(ball, sheetEff, pattern);
+  const sheetResult = scoreBallAgainst(ball, sheetEff, pattern, relativeSpeed);
   return { ...effResult, eff, sheetTotal: sheetResult.total };
 }
 
@@ -631,8 +690,9 @@ function dismissKosiImport() { kosiParseResult = null; kosiParseError = null; re
 // ---------------------------------------------------------------------------
 
 function computeResults() {
+  const bowler = state.bowlers.find(b => b.id === state.activeBowlerId);
   return state.arsenal.map(ball => {
-    const r = fullScore(ball, state.pattern);
+    const r = fullScore(ball, state.pattern, bowler);
     const b = bandFor(r.total);
     const c = bandColors(b.hue);
     return {
@@ -690,7 +750,7 @@ function renderProfileScreen() {
   return `
     <div class="section-head"><h4>Bowlers</h4><button class="btn btn-primary" data-action="open-new-bowler">+ Add bowler</button></div>
     ${cards}
-    <div class="card text-muted" style="font-size:12.5px;">Speed and PAP are recorded for reference — the matrix doesn't factor them into scoring yet (per the algorithm's known limitations).</div>
+    <div class="card text-muted" style="font-size:12.5px;">Speed factors into scoring for the active bowler (relative to a 16.5 mph baseline) — it shifts effective RG and how fast the pattern breaks down. PAP is still recorded for reference only; the matrix doesn't factor it into scoring yet.</div>
   `;
 }
 
@@ -727,7 +787,8 @@ function renderKosiImportCard() {
 function renderPatternScreen() {
   const p = state.pattern;
   const isDual = p.tank === 'dual';
-  const base = deriveStage1(p);
+  const activeBowler = state.bowlers.find(b => b.id === state.activeBowlerId);
+  const base = deriveStage1(p, relativeSpeedFor(activeBowler));
   const preview = applyLaneCondition(base, p.condition);
 
   const presetRow = Object.keys(PRESETS).map(key =>
@@ -803,6 +864,15 @@ function renderPatternScreen() {
           ${Object.keys(CONDITIONERS).map(v => `<option value="${v}" ${p.cond2===v?'selected':''}>${v}</option>`).join('')}
         </select>
       </div>` : ''}
+    </div>
+
+    <div class="card">
+      <div class="card-kicker">Directional bias <span class="text-muted" style="font-weight:400;">(experimental)</span></div>
+      <div class="field" style="margin-bottom:0;">
+        <label>Ideal mass-bias angle: <span data-label="pattern.idealAngle">${Math.round(p.idealAngle ?? 90)}</span>°</label>
+        <input type="range" min="0" max="180" step="5" value="${p.idealAngle ?? 90}" data-scope="pattern" data-field="idealAngle" data-parse="float"/>
+        <div class="text-muted" style="font-size:11px;margin-top:5.6px;">Not auto-derived — a manual per-pattern estimate for how an asymmetric ball's mass-bias placement (set per ball in the Arsenal tab) should line up for this pattern. Defaults to a no-op (90°) until you tune it.</div>
+      </div>
     </div>
 
     <div class="card">
@@ -883,12 +953,24 @@ function renderBallDialog() {
       <div class="field">
         <label>Int. differential (PSA): <span data-label="ballForm.psa">${Number(d.psa).toFixed(3)}</span></label>
         <input type="range" min="0" max="0.030" step="0.001" value="${d.psa}" data-scope="ballForm" data-field="psa" data-parse="float"/>
+      </div>
+      <div class="field">
+        <label>Mass bias angle: <span data-label="ballForm.psaAngle">${Math.round(d.psaAngle ?? 0)}</span>°</label>
+        <input type="range" min="0" max="180" step="5" value="${d.psaAngle ?? 0}" data-scope="ballForm" data-field="psaAngle" data-parse="float"/>
       </div>` : ''}
       <div class="field">
         <label>Cover type</label>
         <select class="input" data-scope="ballForm" data-field="cover" data-parse="string">
           ${['solid','hybrid','pearl','particle'].map(v => `<option value="${v}" ${d.cover===v?'selected':''}>${v.charAt(0).toUpperCase()+v.slice(1)}</option>`).join('')}
         </select>
+      </div>
+      <div class="field">
+        <label>Cover material grade</label>
+        <div class="seg">
+          <label class="seg-opt"><input type="radio" name="coverGrade" value="polyester" ${(d.coverGrade ?? 'reactive')==='polyester'?'checked':''} data-scope="ballForm" data-field="coverGrade" data-parse="string"/>Polyester</label>
+          <label class="seg-opt"><input type="radio" name="coverGrade" value="entry_reactive" ${(d.coverGrade ?? 'reactive')==='entry_reactive'?'checked':''} data-scope="ballForm" data-field="coverGrade" data-parse="string"/>Entry reactive</label>
+          <label class="seg-opt"><input type="radio" name="coverGrade" value="reactive" ${(d.coverGrade ?? 'reactive')==='reactive'?'checked':''} data-scope="ballForm" data-field="coverGrade" data-parse="string"/>Reactive</label>
+        </div>
       </div>
       <div class="field">
         <label>Surface finish</label>
@@ -1075,12 +1157,13 @@ function formatLabel(scope, field, value) {
   if (key === 'ballForm.diff' || key === 'ballForm.psa') return Number(value).toFixed(3);
   if (key === 'ballForm.ptp') return Number(value).toFixed(2);
   if (key === 'ballForm.pinBuffer' || key === 'ballForm.massBiasToPap') return Number(value).toFixed(3);
-  if (key === 'ballForm.grit' || key === 'ballForm.angle' || key === 'ballForm.valAngle') return Math.round(value);
+  if (key === 'ballForm.grit' || key === 'ballForm.angle' || key === 'ballForm.valAngle' || key === 'ballForm.psaAngle') return Math.round(value);
   if (key === 'bowlerForm.pap_lateral' || key === 'bowlerForm.pap_vertical') return Number(value).toFixed(3);
   if (key === 'bowlerForm.speed') return Number(value).toFixed(1);
   if (key === 'bowlerForm.rev_rate') return Math.round(value);
   if (key === 'pattern.sheet_length' || key === 'pattern.wall_board') return value;
   if (key === 'pattern.sheet_ratio') return value;
+  if (key === 'pattern.idealAngle') return Math.round(value);
   return value;
 }
 
@@ -1095,7 +1178,8 @@ document.addEventListener('input', (e) => {
   if (lbl) lbl.textContent = formatLabel(scope, field, value);
 
   if (scope === 'pattern' && ['sheet_length','sheet_ratio','wall_board','cond1','cond2','tank','pattern_type','condition','launch_override'].includes(field)) {
-    const base = deriveStage1(state.pattern);
+    const activeBowler = state.bowlers.find(b => b.id === state.activeBowlerId);
+    const base = deriveStage1(state.pattern, relativeSpeedFor(activeBowler));
     const preview = applyLaneCondition(base, state.pattern.condition);
     const lenEl = document.querySelector('[data-preview="len"]');
     const ratioEl = document.querySelector('[data-preview="ratio"]');
