@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node test/kosi-parser.test.js"
+    "test": "node test/kosi-parser.test.js && node test/session-log.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.112.0"

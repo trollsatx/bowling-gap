@@ -167,7 +167,7 @@ const SEED_ARSENAL = [
 
 const DEFAULT_PATTERN = { sheet_length: 44, sheet_ratio: 2.5, wall_board: 9, pattern_type: 'challenge', tank: 'single', cond1: 'Ice', cond2: 'None', condition: 'Fresh', launch_override: 19, idealAngle: 90 };
 
-const BOWLER_DEFAULTS = { name: '', hand: 'right', pap_lateral: 4.5, pap_vertical: 0.5, speed: 16.5, rev_rate: 350, style: 'tweener', average: 200 };
+const BOWLER_DEFAULTS = { name: '', hand: 'right', pap_lateral: 4.5, pap_vertical: 0.5, speed: 16.5, rev_rate: 350, style: 'tweener', average: 200, sessionLog: [] };
 const SEED_BOWLERS = [{ ...BOWLER_DEFAULTS, id: 'bw1', name: 'Player 1' }];
 
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -242,16 +242,29 @@ function applyLaneCondition(base, condition) {
   };
 }
 
-// Personal launch-board fit (Stage 5). The full version regresses confirmed launch
-// boards from logged sessions once at least 5 exist; this app doesn't yet have a
-// session log to regress against, so it always uses the documented cold-start
-// fallback (wall + 10) — the same behavior a fresh install of the full version
-// would show before any sessions were logged.
-function fittedLaunchBoard(wall) {
-  return wall + 10;
+// Personal launch-board fit (Stage 5). Regresses confirmed launch boards from a
+// bowler's logged sessions (per-bowler, since release/speed differ per bowler) once
+// at least 5 exist; before that, or if the logged wall boards have no variance to
+// regress against, falls back to the documented cold-start estimate (wall + 10).
+function fitLaunchBoardRegression(sessionLog) {
+  const pts = (sessionLog || []).filter(s => Number.isFinite(s.effWall) && Number.isFinite(s.confirmedLaunchBoard));
+  if (pts.length < 5) return null;
+  const n = pts.length;
+  const xBar = pts.reduce((s, p) => s + p.effWall, 0) / n;
+  const yBar = pts.reduce((s, p) => s + p.confirmedLaunchBoard, 0) / n;
+  let num = 0, den = 0;
+  pts.forEach(p => { num += (p.effWall - xBar) * (p.confirmedLaunchBoard - yBar); den += (p.effWall - xBar) ** 2; });
+  if (den === 0) return null; // no wall-board variance to regress against
+  const slope = num / den;
+  return { slope, intercept: yBar - slope * xBar, n };
 }
 
-function scoreBallAgainst(ball, eff, pattern, relativeSpeed) {
+function fittedLaunchBoard(wall, sessionLog) {
+  const fit = fitLaunchBoardRegression(sessionLog);
+  return fit ? wall * fit.slope + fit.intercept : wall + 10;
+}
+
+function scoreBallAgainst(ball, eff, pattern, relativeSpeed, sessionLog) {
   const rs = relativeSpeed || 0;
   const rgNorm = (ball.rg - 2.45) / 0.20;
   const lenNorm = (eff.effLen - 26) / 28;
@@ -280,7 +293,7 @@ function scoreBallAgainst(ball, eff, pattern, relativeSpeed) {
   const ballReadEarly = coverGradeMult * ((1 - gritNorm) * 0.40 + (matte ? 0.15 : -0.10) + (effectiveCoverBase - 0.55) * 0.35 + (1 - adjustedRgNorm) * 0.15);
   const surfaceScore = clamp01(1 - Math.abs(patReadDemand - ballReadEarly));
 
-  const launchBoard = pattern.launch_override ? Number(pattern.launch_override) : fittedLaunchBoard(eff.effWall);
+  const launchBoard = pattern.launch_override ? Number(pattern.launch_override) : fittedLaunchBoard(eff.effWall, sessionLog);
   const recovery = Math.max(launchBoard - eff.effWall, 1);
   const timingNeed = recovery > 15 ? 0.3 : recovery > 8 ? 0.5 : 0.8;
   const timingScore = clamp01(1 - Math.abs(timingNeed - (ball.ptp - 2.5) / 3.0));
@@ -317,11 +330,12 @@ function scoreBallAgainst(ball, eff, pattern, relativeSpeed) {
 
 function fullScore(ball, pattern, bowler) {
   const relativeSpeed = relativeSpeedFor(bowler);
+  const sessionLog = bowler ? bowler.sessionLog : null;
   const base = deriveStage1(pattern, relativeSpeed);
   const eff = applyLaneCondition(base, pattern.condition);
-  const effResult = scoreBallAgainst(ball, eff, pattern, relativeSpeed);
+  const effResult = scoreBallAgainst(ball, eff, pattern, relativeSpeed, sessionLog);
   const sheetEff = { effLen: Number(pattern.sheet_length), effRatio: Number(pattern.sheet_ratio), effWall: Number(pattern.wall_board) };
-  const sheetResult = scoreBallAgainst(ball, sheetEff, pattern, relativeSpeed);
+  const sheetResult = scoreBallAgainst(ball, sheetEff, pattern, relativeSpeed, sessionLog);
   return { ...effResult, eff, sheetTotal: sheetResult.total };
 }
 
@@ -528,6 +542,8 @@ let state = {
   ballForm: null,
   bowlerForm: null,
   detailBallId: null,
+  sessionLogBowlerId: null,
+  sessionForm: null,
 };
 
 let kosiParseResult = null;
@@ -646,6 +662,44 @@ function deleteBowler(id) {
 }
 function setActiveBowler(id) { state.activeBowlerId = id; persist(); render(); }
 
+// — Session log (Stage 5 launch-board calibration) —
+function openSessionLog(bowlerId) { state.sessionLogBowlerId = bowlerId; state.sessionForm = null; render(); }
+function closeSessionLog() { state.sessionLogBowlerId = null; state.sessionForm = null; render(); }
+function openSessionForm() {
+  state.sessionForm = { consistentConfirm: false, ballId: '', confirmedLaunchBoard: '', outLegBoards: '', backLegBoards: '', outcomeNote: '' };
+  render();
+}
+function closeSessionForm() { state.sessionForm = null; render(); }
+function saveSessionForm() {
+  const draft = state.sessionForm;
+  const bowler = state.bowlers.find(b => b.id === state.sessionLogBowlerId);
+  if (!draft || !bowler) return;
+  if (!draft.consistentConfirm || !Number.isFinite(draft.confirmedLaunchBoard)) return;
+  const effWall = Math.round(applyLaneCondition(deriveStage1(state.pattern, relativeSpeedFor(bowler)), state.pattern.condition).effWall);
+  const ball = draft.ballId ? state.arsenal.find(b => b.id === draft.ballId) : null;
+  const entry = {
+    id: 'sl' + Date.now(),
+    createdAt: new Date().toISOString(),
+    patternLabel: patternSummary(state.pattern) + ' · ' + state.pattern.condition,
+    effWall,
+    confirmedLaunchBoard: draft.confirmedLaunchBoard,
+    ballId: ball ? ball.id : null,
+    ballName: ball ? ball.name : null,
+    outLegBoards: Number.isFinite(draft.outLegBoards) ? draft.outLegBoards : null,
+    backLegBoards: Number.isFinite(draft.backLegBoards) ? draft.backLegBoards : null,
+    outcomeNote: (draft.outcomeNote || '').trim(),
+  };
+  state.bowlers = state.bowlers.map(b => (b.id === bowler.id ? { ...b, sessionLog: [...(b.sessionLog || []), entry] } : b));
+  state.sessionForm = null;
+  persist(); render();
+}
+function deleteSession(entryId) {
+  const bowlerId = state.sessionLogBowlerId;
+  if (!bowlerId) return;
+  state.bowlers = state.bowlers.map(b => (b.id === bowlerId ? { ...b, sessionLog: (b.sessionLog || []).filter(s => s.id !== entryId) } : b));
+  persist(); render();
+}
+
 function openDetail(id) { state.detailBallId = id; render(); }
 function closeDetail() { state.detailBallId = null; render(); }
 
@@ -745,6 +799,7 @@ function renderProfileScreen() {
         ${bw.id === state.activeBowlerId
           ? '<span class="tag tag-outline">Active</span>'
           : `<button class="btn btn-secondary" data-action="set-active-bowler" data-id="${bw.id}">Set active</button>`}
+        <button class="btn btn-secondary" data-action="open-session-log" data-id="${bw.id}">Session log (${(bw.sessionLog || []).length})</button>
       </div>
     </div>`).join('');
   return `
@@ -1076,6 +1131,91 @@ function renderBowlerDialog() {
   </div>`;
 }
 
+function renderSessionLogDialog() {
+  const bowler = state.bowlers.find(b => b.id === state.sessionLogBowlerId);
+  if (!bowler) return '';
+  const sessionLog = bowler.sessionLog || [];
+  const fit = fitLaunchBoardRegression(sessionLog);
+  const statusLine = fit
+    ? `Personal fit active — launch board ≈ wall × ${fit.slope.toFixed(2)} + ${fit.intercept.toFixed(2)} (from ${fit.n} sessions).`
+    : `Cold start — using wall + 10 until 5 sessions are logged (${sessionLog.length}/5).`;
+
+  const f = state.sessionForm;
+  let formBody;
+  if (f) {
+    const effWall = Math.round(applyLaneCondition(deriveStage1(state.pattern, relativeSpeedFor(bowler)), state.pattern.condition).effWall);
+    const canSave = !!f.consistentConfirm && Number.isFinite(f.confirmedLaunchBoard);
+    formBody = `
+      <div class="kosi-warn">Log one entry per <b>consistent session</b> — the same ball, the same target line, your normal release, ideally averaged over a full game. A single stray shot, or mixing different balls/lines/releases into one entry, makes the fit worse, not better.</div>
+      <div class="field" style="margin-top:8.4px;">
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:400;">
+          <input type="checkbox" style="margin-top:3px;" ${f.consistentConfirm ? 'checked' : ''} data-scope="sessionForm" data-field="consistentConfirm" data-parse="checkbox"/>
+          <span>This reading is from a full game (or a consistent stretch of shots) with one ball, one line, one release — not a single shot.</span>
+        </label>
+      </div>
+      <div class="field">
+        <label>Effective wall board (today's pattern): <b>${effWall}</b></label>
+      </div>
+      <div class="field">
+        <label>Ball</label>
+        <select class="input" data-scope="sessionForm" data-field="ballId" data-parse="string">
+          <option value="">Not specified</option>
+          ${state.arsenal.map(b => `<option value="${b.id}" ${f.ballId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field">
+        <label>Launch board (average for the session, not a single shot)</label>
+        <input class="input" type="number" value="${f.confirmedLaunchBoard}" data-scope="sessionForm" data-field="confirmedLaunchBoard" data-parse="floatOrEmpty"/>
+      </div>
+      <div class="field">
+        <label>Out-leg boards <span class="text-muted" style="font-size:11px;">(optional, not used in scoring yet)</span></label>
+        <input class="input" type="number" value="${f.outLegBoards}" data-scope="sessionForm" data-field="outLegBoards" data-parse="floatOrEmpty"/>
+      </div>
+      <div class="field">
+        <label>Back-leg boards <span class="text-muted" style="font-size:11px;">(optional, not used in scoring yet)</span></label>
+        <input class="input" type="number" value="${f.backLegBoards}" data-scope="sessionForm" data-field="backLegBoards" data-parse="floatOrEmpty"/>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>Outcome note <span class="text-muted" style="font-size:11px;">(optional)</span></label>
+        <input class="input" type="text" value="${esc(f.outcomeNote || '')}" placeholder="e.g. carried well, left a 10 twice" data-scope="sessionForm" data-field="outcomeNote" data-parse="string"/>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-action="session-form-cancel">Cancel</button>
+        <button class="btn btn-primary" data-action="session-form-save" ${canSave ? '' : 'disabled'}>Save session</button>
+      </div>
+    `;
+  } else {
+    formBody = `<button class="btn btn-primary" data-action="open-session-form" style="margin-bottom:11.2px;">+ Log a session</button>`;
+  }
+
+  const sorted = [...sessionLog].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const entriesList = sorted.length === 0 ? '' : `
+    <div class="card-kicker" style="margin-top:11.2px;">Logged sessions</div>
+    ${sorted.map(s => `
+      <div class="card pattern-row">
+        <div style="flex:1;">
+          <div class="card-title" style="font-size:13px;">${esc(s.patternLabel || 'Pattern')}</div>
+          <div class="text-muted" style="font-size:11px;">wall ${s.effWall} → launch ${s.confirmedLaunchBoard}${s.ballName ? ' · ' + esc(s.ballName) : ''}${s.outcomeNote ? ' · ' + esc(s.outcomeNote) : ''}</div>
+        </div>
+        <button class="btn btn-ghost" data-action="delete-session" data-id="${s.id}">Remove</button>
+      </div>
+    `).join('')}
+  `;
+
+  return `
+  <div class="dialog-backdrop" data-action="noop">
+    <div class="dialog" data-action="noop">
+      <div class="dialog-title">${esc(bowler.name)}'s session log</div>
+      <div class="text-muted" style="font-size:12.5px;margin-bottom:11.2px;">${statusLine}</div>
+      ${formBody}
+      ${entriesList}
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-action="close-session-log">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderDetailDialog() {
   if (!state.detailBallId) return '';
   const results = computeResults();
@@ -1127,7 +1267,7 @@ function render() {
   else if (state.screen === 'pattern') screenEl.innerHTML = renderPatternScreen();
   else screenEl.innerHTML = renderResultsScreen();
 
-  document.getElementById('dialogs').innerHTML = renderBallDialog() + renderBowlerDialog() + renderDetailDialog();
+  document.getElementById('dialogs').innerHTML = renderBallDialog() + renderBowlerDialog() + renderSessionLogDialog() + renderDetailDialog();
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,6 +1280,7 @@ function parseValue(el) {
   if (parse === 'float') return parseFloat(raw);
   if (parse === 'floatOrEmpty') return raw === '' ? '' : parseFloat(raw);
   if (parse === 'bool') return raw === 'true';
+  if (parse === 'checkbox') return el.checked;
   return raw;
 }
 
@@ -1219,6 +1360,12 @@ document.addEventListener('click', (e) => {
     case 'set-active-bowler': setActiveBowler(id); break;
     case 'bowler-form-save': saveBowlerForm(); break;
     case 'bowler-form-cancel': closeBowlerForm(); break;
+    case 'open-session-log': openSessionLog(id); break;
+    case 'close-session-log': closeSessionLog(); break;
+    case 'open-session-form': openSessionForm(); break;
+    case 'session-form-cancel': closeSessionForm(); break;
+    case 'session-form-save': saveSessionForm(); break;
+    case 'delete-session': deleteSession(id); break;
     case 'apply-preset': applyPreset(el.dataset.preset); break;
     case 'save-pattern-as': saveCurrentPatternAs(); break;
     case 'load-pattern': loadSavedPattern(id); break;
