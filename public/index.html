@@ -33,7 +33,7 @@ a:hover{color:#b5abfc;}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;text-decoration:none;
   font-family:var(--font-heading);font-weight:500;font-size:14px;line-height:1.2;color:var(--color-text);
-  background:transparent;border:1px solid transparent;padding:var(--space-2) calc(var(--space-3) * 1.2);border-radius:var(--radius-md);}
+  background:transparent;border:1px solid transparent;padding:var(--space-2) calc(var(--space-3) * 1.2);border-radius:var(--radius-md);min-height:44px;}
 .btn-primary{color:var(--color-accent);border-color:var(--color-accent);}
 .btn-primary:hover{background:color-mix(in srgb,var(--color-accent) 12%,transparent);}
 .btn-secondary{border-color:var(--color-divider);}
@@ -57,7 +57,7 @@ input[type="range"]::-moz-range-thumb{width:30px;height:30px;border-radius:50%;b
   background:var(--color-accent);box-shadow:0 0 0 1.5px var(--color-accent),var(--shadow-md);cursor:pointer;}
 
 .seg{display:flex;overflow:hidden;border:1px solid var(--color-divider);border-radius:var(--radius-md);width:100%;margin-bottom:var(--space-6);}
-.seg-opt{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;font-size:13px;cursor:pointer;}
+.seg-opt{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 12px;font-size:13px;cursor:pointer;min-height:44px;}
 .seg-opt+.seg-opt{border-left:1px solid var(--color-divider);}
 .seg-opt input{position:absolute;opacity:0;width:0;height:0;pointer-events:none;}
 .seg-opt:has(input:checked){color:var(--color-accent);box-shadow:inset 0 0 0 1px var(--color-accent);}
@@ -146,6 +146,12 @@ const CONDITIONERS = {
 };
 
 const BAND_HUES = { Primary: 289, Viable: 230, Marginal: 85, Gap: 25 };
+
+// Plausible-value bounds for sheet ratio / wall board, shared between the Pattern
+// tab's own sliders and the KOSI importer's plausibility check (an estimate outside
+// what the sliders themselves allow is a strong signal the estimate is broken).
+const SHEET_RATIO_BOUNDS = { min: 1.5, max: 15 };
+const WALL_BOARD_BOUNDS = { min: 3, max: 20 };
 
 const PRESETS = {
   house: { label: 'House Shot', sheet_length: 39, sheet_ratio: 9, wall_board: 15, pattern_type: 'house', tank: 'dual', cond1: 'Fire', cond2: 'Crown', launch_override: '' },
@@ -516,6 +522,16 @@ function parseKosiText(text) {
     warnings.push("Couldn't isolate load-count tables — ratio and wall board weren't estimated.");
   }
 
+  // Sanity-check the estimates against the same bounds the Pattern tab's own sliders
+  // allow — a KOSI misread is far more likely than a pattern genuinely outside these
+  // ranges, so flag it plainly rather than quietly offering a broken "Apply."
+  if (ratioEstimate != null && (ratioEstimate < SHEET_RATIO_BOUNDS.min || ratioEstimate > SHEET_RATIO_BOUNDS.max)) {
+    warnings.push(`Estimated ratio (${ratioEstimate}:1) is outside the plausible ${SHEET_RATIO_BOUNDS.min}-${SHEET_RATIO_BOUNDS.max}:1 range — this read is probably wrong. Verify against the printed sheet before applying.`);
+  }
+  if (wallBoardEstimate != null && (wallBoardEstimate < WALL_BOARD_BOUNDS.min || wallBoardEstimate > WALL_BOARD_BOUNDS.max)) {
+    warnings.push(`Estimated wall board (${wallBoardEstimate}) is outside the plausible ${WALL_BOARD_BOUNDS.min}-${WALL_BOARD_BOUNDS.max} range — this read is probably wrong. Verify against the printed sheet before applying.`);
+  }
+
   return { name, distanceFt, tank, tankDetected, cond1, cond2, ratioEstimate, wallBoardEstimate, warnings };
 }
 
@@ -704,8 +720,16 @@ function openDetail(id) { state.detailBallId = id; render(); }
 function closeDetail() { state.detailBallId = null; render(); }
 
 // — Kegel KOSI import —
+const KOSI_MAX_FILE_BYTES = 256 * 1024; // real exports are a few KB; guards against reading a wrong/huge file whole into memory
+
 function handleKosiFile(file) {
   if (!file) return;
+  if (file.size > KOSI_MAX_FILE_BYTES) {
+    kosiParseResult = null;
+    kosiParseError = `That file is ${Math.round(file.size / 1024)} KB — too large to be a Kegel KOSI export (real exports are a few KB). Check you picked the right file.`;
+    render();
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     try {
@@ -883,11 +907,11 @@ function renderPatternScreen() {
       </div>
       <div class="field">
         <label>Ratio: <span data-label="pattern.sheet_ratio">${p.sheet_ratio}</span>:1</label>
-        <input type="range" min="1.5" max="15" step="0.5" value="${p.sheet_ratio}" data-scope="pattern" data-field="sheet_ratio" data-parse="float"/>
+        <input type="range" min="${SHEET_RATIO_BOUNDS.min}" max="${SHEET_RATIO_BOUNDS.max}" step="0.5" value="${p.sheet_ratio}" data-scope="pattern" data-field="sheet_ratio" data-parse="float"/>
       </div>
       <div class="field" style="margin-bottom:0;">
         <label>Wall board: <span data-label="pattern.wall_board">${p.wall_board}</span></label>
-        <input type="range" min="3" max="20" step="1" value="${p.wall_board}" data-scope="pattern" data-field="wall_board" data-parse="float"/>
+        <input type="range" min="${WALL_BOARD_BOUNDS.min}" max="${WALL_BOARD_BOUNDS.max}" step="1" value="${p.wall_board}" data-scope="pattern" data-field="wall_board" data-parse="float"/>
       </div>
     </div>
 
@@ -989,6 +1013,7 @@ function renderBallDialog() {
         <label>Name</label>
         <input class="input" type="text" value="${esc(d.name)}" placeholder="e.g. Vengeance" data-scope="ballForm" data-field="name" data-parse="string"/>
       </div>
+      <div class="card-kicker">Core &amp; specs</div>
       <div class="field">
         <label>RG: <span data-label="ballForm.rg">${Number(d.rg).toFixed(2)}</span></label>
         <input type="range" min="2.45" max="2.65" step="0.01" value="${d.rg}" data-scope="ballForm" data-field="rg" data-parse="float"/>
@@ -1013,6 +1038,7 @@ function renderBallDialog() {
         <label>Mass bias angle: <span data-label="ballForm.psaAngle">${Math.round(d.psaAngle ?? 0)}</span>°</label>
         <input type="range" min="0" max="180" step="5" value="${d.psaAngle ?? 0}" data-scope="ballForm" data-field="psaAngle" data-parse="float"/>
       </div>` : ''}
+      <div class="card-kicker" style="margin-top:11.2px;">Cover &amp; surface</div>
       <div class="field">
         <label>Cover type</label>
         <select class="input" data-scope="ballForm" data-field="cover" data-parse="string">
@@ -1038,6 +1064,7 @@ function renderBallDialog() {
         <label>Surface grit: <span data-label="ballForm.grit">${Math.round(d.grit)}</span></label>
         <input type="range" min="500" max="4000" step="100" value="${d.grit}" data-scope="ballForm" data-field="grit" data-parse="float"/>
       </div>
+      <div class="card-kicker" style="margin-top:11.2px;">Layout</div>
       <div class="field">
         <label>Layout format</label>
         <div class="seg">

@@ -12,19 +12,19 @@ const assert = require('assert');
 function loadParseKosiText() {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
   const condStart = html.indexOf('const CONDITIONERS');
-  const condEnd = html.indexOf('const BAND_HUES');
+  const condEnd = html.indexOf('const PT_LABELS');
   const fnStart = html.indexOf('function parseKosiText');
   const fnEnd = html.indexOf('function bandColors');
   if (condStart === -1 || condEnd === -1 || fnStart === -1 || fnEnd === -1) {
     throw new Error('Could not locate parseKosiText/CONDITIONERS in public/index.html — source markers moved.');
   }
-  const src = html.slice(condStart, condEnd) + '\n' + html.slice(fnStart, fnEnd) + '\nmodule.exports = { parseKosiText };';
+  const src = html.slice(condStart, condEnd) + '\n' + html.slice(fnStart, fnEnd) + '\nmodule.exports = { parseKosiText, WALL_BOARD_BOUNDS, SHEET_RATIO_BOUNDS };';
   const modPath = path.join(__dirname, '.parseKosiText.generated.js');
   fs.writeFileSync(modPath, src);
   delete require.cache[require.resolve(modPath)];
   const mod = require(modPath);
   fs.unlinkSync(modPath);
-  return mod.parseKosiText;
+  return mod;
 }
 
 function readFixture(name) {
@@ -32,7 +32,7 @@ function readFixture(name) {
 }
 
 function run() {
-  const parseKosiText = loadParseKosiText();
+  const { parseKosiText, WALL_BOARD_BOUNDS, SHEET_RATIO_BOUNDS } = loadParseKosiText();
   let passed = 0;
   function test(name, fn) {
     try {
@@ -106,6 +106,39 @@ function run() {
     assert.strictEqual(r.tankDetected, true);
     assert.strictEqual(r.tank, 'dual');
     assert.ok(!r.warnings.some(w => /tank letter/i.test(w)));
+  });
+
+  test('implausible wall-board estimate (outside the Pattern tab\'s own slider bounds) is flagged, not silently offered', () => {
+    // Synthetic file where the load-bearing boards run up to 26 — inside the lane
+    // (<=39, so it still passes the KOSI-format sanity check) but well outside the
+    // 3-20 wall-board range the app's own Pattern tab sliders allow, which is a much
+    // stronger signal of a bad read than of a real pattern.
+    const lines = [
+      '-1',
+      'Synthetic Bounds Test',
+      '',
+      '1', '1', '0', '720', '1', // header block (skipped)
+      '',
+      '1', '1', '5', // loads pass 1
+      '',
+      '2L', '24L', '26L', // boardTokenBlocks[0] — forward
+      '',
+      '2R', '3R', // boardTokenBlocks[1] — filler, just needs to exist
+      '',
+      '2R', '24R', '26R', // boardTokenBlocks[2] — reverse
+      '',
+      '1', '2', '1', // loads pass 2 (must not be all-equal or it's classified as a constant setting block)
+      '',
+      '3.9', '7.8', '15.4', // precise distance table, forward
+      '',
+      '36', '29.8', '24.7', // precise distance table, reverse
+      '',
+      '0', '0', '0', '0', // footer block (skipped)
+    ];
+    const r = parseKosiText(lines.join('\n'));
+    assert.strictEqual(r.wallBoardEstimate, 26);
+    assert.ok(r.wallBoardEstimate > WALL_BOARD_BOUNDS.max, 'test fixture should actually exceed the bound it is testing');
+    assert.ok(r.warnings.some(w => /wall board.*outside the plausible/i.test(w)), `expected an implausible-wall-board warning, got: ${JSON.stringify(r.warnings)}`);
   });
 
   console.log(`\n${passed} passed`);
