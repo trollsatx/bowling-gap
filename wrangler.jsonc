@@ -6,6 +6,7 @@
     "directory": "./public",
     "binding": "ASSETS",
   },
+  "workers_dev": true,
   "routes": [
     {
       "pattern": "fit.joelms.me",
