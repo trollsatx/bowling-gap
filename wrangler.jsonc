@@ -6,4 +6,10 @@
     "directory": "./public",
     "binding": "ASSETS",
   },
+  "routes": [
+    {
+      "pattern": "fit.joelms.me",
+      "custom_domain": true,
+    },
+  ],
 }
