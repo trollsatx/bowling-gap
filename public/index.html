@@ -29,7 +29,10 @@ a:hover{color:#b5abfc;}
 :focus-visible{outline:2px solid var(--color-accent);outline-offset:2px;}
 
 .nav{display:flex;align-items:center;gap:var(--space-4);padding:var(--space-3) var(--space-4);}
-.nav-brand{font-family:var(--font-heading);font-weight:600;font-size:18px;margin-left:var(--space-3);margin-right:auto;}
+.nav-brand{font-family:var(--font-heading);font-weight:600;font-size:18px;margin-left:var(--space-3);margin-right:auto;cursor:pointer;}
+.hamburger-btn{font-size:20px;min-width:44px;}
+.menu-link{width:100%;justify-content:flex-start;margin-bottom:var(--space-2);}
+.menu-link:last-of-type{margin-bottom:0;}
 
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;text-decoration:none;
   font-family:var(--font-heading);font-weight:500;font-size:14px;line-height:1.2;color:var(--color-text);
@@ -89,6 +92,11 @@ input[type="range"]::-moz-range-thumb{width:30px;height:30px;border-radius:50%;b
 .result-row{display:flex;align-items:center;gap:11.2px;cursor:pointer;}
 .result-rank{width:22px;text-align:center;font-weight:700;font-size:13px;color:color-mix(in srgb,var(--color-text) 55%,transparent);}
 .result-total{font-family:var(--font-heading);font-size:26px;font-weight:600;}
+.mini-radar{flex-shrink:0;}
+.mini-radar-score{font-family:var(--font-heading);font-size:28px;font-weight:700;fill:var(--color-text);}
+.context-card .field{margin-bottom:8.4px;}
+.context-card .field:last-child{margin-bottom:0;}
+.context-pattern-row{display:flex;justify-content:space-between;align-items:center;gap:8.4px;}
 .preview-card{background:var(--color-accent-900);}
 .preview-grid{display:flex;gap:16.8px;}
 .preview-num{font-family:var(--font-heading);font-size:22px;font-weight:600;}
@@ -116,17 +124,10 @@ input[type="range"]::-moz-range-thumb{width:30px;height:30px;border-radius:50%;b
 <body>
 <div class="page">
   <div class="nav">
-    <div class="nav-brand">Gap Matrix</div>
-    <div class="tag tag-outline" id="pattern-type-tag"></div>
+    <div class="nav-brand" data-action="goto-tab" data-tab="results">Gap Matrix</div>
+    <button class="btn btn-ghost hamburger-btn" data-action="toggle-hamburger" aria-label="Menu">&#9776;</button>
   </div>
   <div class="subtitle">Ball-to-pattern fit scoring, coached in plain language.</div>
-
-  <div class="seg" id="tab-seg">
-    <label class="seg-opt"><input type="radio" name="tab" value="arsenal"/>Arsenal</label>
-    <label class="seg-opt"><input type="radio" name="tab" value="profile"/>Profile</label>
-    <label class="seg-opt"><input type="radio" name="tab" value="pattern"/>Pattern</label>
-    <label class="seg-opt"><input type="radio" name="tab" value="results"/>Results</label>
-  </div>
 
   <div id="screen"></div>
 </div>
@@ -164,11 +165,11 @@ const PRESETS = {
 const PT_LABELS = { house: 'House Shot', sport_short: 'Sport Short', sport_long: 'Sport Long', challenge: 'Challenge Pattern' };
 const STYLE_LABELS = { stroker: 'Stroker', tweener: 'Tweener', power_player: 'Power player', cranker: 'Cranker' };
 
-const BALL_DEFAULTS = { name: '', rg: 2.50, diff: 0.040, asym: false, psa: 0.010, psaAngle: 0, cover: 'solid', coverGrade: 'reactive', finish: 'matte', grit: 2000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 };
+const BALL_DEFAULTS = { name: '', ownerId: null, rg: 2.50, diff: 0.040, asym: false, psa: 0.010, psaAngle: 0, cover: 'solid', coverGrade: 'reactive', finish: 'matte', grit: 2000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 };
 
 const SEED_ARSENAL = [
-  { id: 'seed1', name: 'Vengeance', rg: 2.49, diff: 0.052, asym: true, psa: 0.018, psaAngle: 0, cover: 'solid', coverGrade: 'reactive', finish: 'polish', grit: 4000, ptp: 4.5, angle: 45, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 },
-  { id: 'seed2', name: 'HyRoad 40', rg: 2.53, diff: 0.037, asym: false, psa: 0, psaAngle: 0, cover: 'pearl', coverGrade: 'reactive', finish: 'polish', grit: 4000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.375, massBiasToPap: 4.25 },
+  { id: 'seed1', name: 'Vengeance', ownerId: 'bw1', rg: 2.49, diff: 0.052, asym: true, psa: 0.018, psaAngle: 0, cover: 'solid', coverGrade: 'reactive', finish: 'polish', grit: 4000, ptp: 4.5, angle: 45, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.0, massBiasToPap: 4.0 },
+  { id: 'seed2', name: 'HyRoad 40', ownerId: 'bw1', rg: 2.53, diff: 0.037, asym: false, psa: 0, psaAngle: 0, cover: 'pearl', coverGrade: 'reactive', finish: 'polish', grit: 4000, ptp: 4.0, angle: 40, valAngle: 35, layoutFormat: 'dual', pinBuffer: 3.375, massBiasToPap: 4.25 },
 ];
 
 const DEFAULT_PATTERN = { sheet_length: 44, sheet_ratio: 2.5, wall_board: 9, pattern_type: 'challenge', tank: 'single', cond1: 'Ice', cond2: 'None', condition: 'Fresh', launch_override: 19, idealAngle: 90 };
@@ -362,6 +363,15 @@ function radarPoints(l, s, r, c) {
     const y = cy + R * frac * Math.sin(a);
     return x.toFixed(1) + ',' + y.toFixed(1);
   }).join(' ');
+}
+
+function renderMiniRadar(ball) {
+  const pts = radarPoints(ball.lengthScore, ball.surfaceScore, ball.recoveryScore, ball.coreScore);
+  return `
+    <svg width="60" height="60" viewBox="15 15 100 100" class="mini-radar" aria-hidden="true">
+      <polygon points="${pts}" fill="var(--color-accent-800)" stroke="var(--color-accent)" stroke-width="2"/>
+      <text x="65" y="65" text-anchor="middle" dominant-baseline="central" class="mini-radar-score">${ball.total}</text>
+    </svg>`;
 }
 
 function insightFor(r, total) {
@@ -560,6 +570,9 @@ let state = {
   detailBallId: null,
   sessionLogBowlerId: null,
   sessionForm: null,
+  hamburgerOpen: false,
+  arsenalOwnerFilter: 'all',
+  confirmDeleteBowlerId: null,
 };
 
 let kosiParseResult = null;
@@ -575,6 +588,15 @@ let kosiParseError = null;
       state.savedPatterns = saved.savedPatterns || [];
       state.bowlers = (saved.bowlers && saved.bowlers.length) ? saved.bowlers : SEED_BOWLERS;
       state.activeBowlerId = saved.activeBowlerId || (saved.bowlers && saved.bowlers[0] && saved.bowlers[0].id) || 'bw1';
+
+      // One-time migration: balls saved before per-bowler ownership existed have no
+      // ownerId. With a single bowler (the only real-world case so far) this is
+      // unambiguous; with multiple, there's no way to know who owned what
+      // retroactively, so it falls back to the active bowler as a best effort.
+      if (state.arsenal.some(b => b.ownerId === undefined)) {
+        const fallbackOwnerId = state.activeBowlerId || (state.bowlers[0] && state.bowlers[0].id) || null;
+        state.arsenal = state.arsenal.map(b => (b.ownerId === undefined ? { ...b, ownerId: fallbackOwnerId } : b));
+      }
     }
   } catch (e) {}
 })();
@@ -597,7 +619,12 @@ function persist() {
 
 function setScreen(s) { state.screen = s; state.detailBallId = null; render(); }
 
-function openNewBallForm() { state.ballForm = { ...BALL_DEFAULTS, id: null, isNew: true }; render(); }
+function openNewBallForm() {
+  const defaultOwnerId = (state.arsenalOwnerFilter && state.arsenalOwnerFilter !== 'all' && state.arsenalOwnerFilter !== 'unassigned')
+    ? state.arsenalOwnerFilter : null;
+  state.ballForm = { ...BALL_DEFAULTS, ownerId: defaultOwnerId, id: null, isNew: true };
+  render();
+}
 function openEditBallForm(id) {
   const ball = state.arsenal.find(b => b.id === id);
   if (ball) { state.ballForm = { ...ball, isNew: false }; render(); }
@@ -671,12 +698,24 @@ function saveBowlerForm() {
   state.bowlerForm = null;
   persist(); render();
 }
-function deleteBowler(id) {
+function openDeleteBowlerConfirm(id) { state.confirmDeleteBowlerId = id; render(); }
+function closeDeleteBowlerConfirm() { state.confirmDeleteBowlerId = null; render(); }
+function deleteBowlerCascade(id) {
   state.bowlers = state.bowlers.filter(b => b.id !== id);
+  state.arsenal = state.arsenal.filter(b => b.ownerId !== id);
   if (state.activeBowlerId === id) state.activeBowlerId = state.bowlers[0] ? state.bowlers[0].id : null;
+  state.confirmDeleteBowlerId = null;
+  persist(); render();
+}
+function deleteBowlerKeepArsenal(id) {
+  state.bowlers = state.bowlers.filter(b => b.id !== id);
+  state.arsenal = state.arsenal.map(b => (b.ownerId === id ? { ...b, ownerId: null } : b));
+  if (state.activeBowlerId === id) state.activeBowlerId = state.bowlers[0] ? state.bowlers[0].id : null;
+  state.confirmDeleteBowlerId = null;
   persist(); render();
 }
 function setActiveBowler(id) { state.activeBowlerId = id; persist(); render(); }
+function goToArsenalFiltered(ownerId) { state.arsenalOwnerFilter = ownerId; state.screen = 'arsenal'; render(); }
 
 // — Session log (Stage 5 launch-board calibration) —
 function openSessionLog(bowlerId) { state.sessionLogBowlerId = bowlerId; state.sessionForm = null; render(); }
@@ -769,7 +808,8 @@ function dismissKosiImport() { kosiParseResult = null; kosiParseError = null; re
 
 function computeResults() {
   const bowler = state.bowlers.find(b => b.id === state.activeBowlerId);
-  return state.arsenal.map(ball => {
+  const arsenal = state.arsenal.filter(b => b.ownerId === state.activeBowlerId);
+  return arsenal.map(ball => {
     const r = fullScore(ball, state.pattern, bowler);
     const b = bandFor(r.total);
     const c = bandColors(b.hue);
@@ -789,23 +829,65 @@ function computeResults() {
   }).sort((a, b) => b.total - a.total).map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
+function ownerName(ownerId) {
+  if (!ownerId) return 'Unassigned';
+  const b = state.bowlers.find(bw => bw.id === ownerId);
+  return b ? b.name : 'Unassigned';
+}
+
 function renderArsenalScreen() {
-  const cards = state.arsenal.map(ball => `
+  const filter = state.arsenalOwnerFilter || 'all';
+  const filtered = state.arsenal.filter(ball => {
+    if (filter === 'all') return true;
+    if (filter === 'unassigned') return !ball.ownerId;
+    return ball.ownerId === filter;
+  });
+
+  const ballCard = (ball) => `
     <div class="card card-row" data-action="edit-ball" data-id="${ball.id}">
       <div class="card-row-head">
         <div class="card-title">${esc(ball.name)}</div>
         <button class="btn btn-ghost" data-action="delete-ball" data-id="${ball.id}">Remove</button>
       </div>
       <div class="card-tags">
+        <span class="tag tag-outline">${esc(ownerName(ball.ownerId))}</span>
         <span class="tag tag-neutral">RG ${Number(ball.rg).toFixed(2)}</span>
         <span class="tag tag-neutral">Diff ${Number(ball.diff).toFixed(3)}</span>
         <span class="tag tag-neutral">${esc(ball.cover.charAt(0).toUpperCase() + ball.cover.slice(1))}</span>
         <span class="tag tag-outline">${ball.asym ? 'Asym' : 'Sym'}</span>
       </div>
-    </div>`).join('');
+    </div>`;
+
+  let listHtml;
+  if (filtered.length === 0) {
+    listHtml = '<div class="card empty-card">No balls here yet.</div>';
+  } else if (filter === 'all') {
+    const groups = new Map();
+    filtered.forEach(ball => {
+      const key = ball.ownerId || '__unassigned__';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(ball);
+    });
+    const orderedKeys = [...state.bowlers.map(b => b.id), '__unassigned__'].filter(k => groups.has(k));
+    listHtml = orderedKeys.map(key => `
+      <div class="card-kicker" style="margin-top:11.2px;">${esc(key === '__unassigned__' ? 'Unassigned' : ownerName(key))}</div>
+      ${groups.get(key).map(ballCard).join('')}
+    `).join('');
+  } else {
+    listHtml = filtered.map(ballCard).join('');
+  }
+
   return `
-    <div class="section-head"><h4>Your arsenal</h4><button class="btn btn-primary" data-action="open-new-ball">+ Add ball</button></div>
-    ${state.arsenal.length === 0 ? '<div class="card empty-card">No balls yet — add your first one to start scoring.</div>' : cards}
+    <div class="section-head"><h4>Arsenal</h4><button class="btn btn-primary" data-action="open-new-ball">+ Add ball</button></div>
+    <div class="field">
+      <label>Filter by bowler</label>
+      <select class="input" data-scope="root" data-field="arsenalOwnerFilter" data-parse="string">
+        <option value="all" ${filter === 'all' ? 'selected' : ''}>All bowlers</option>
+        ${state.bowlers.map(b => `<option value="${b.id}" ${filter === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}
+        <option value="unassigned" ${filter === 'unassigned' ? 'selected' : ''}>Unassigned</option>
+      </select>
+    </div>
+    ${listHtml}
   `;
 }
 
@@ -814,7 +896,7 @@ function renderProfileScreen() {
     <div class="card card-row" data-action="edit-bowler" data-id="${bw.id}">
       <div class="card-row-head">
         <div class="card-title">${esc(bw.name)}</div>
-        <button class="btn btn-ghost" data-action="delete-bowler" data-id="${bw.id}">Remove</button>
+        <button class="btn btn-ghost" data-action="confirm-delete-bowler" data-id="${bw.id}">Remove</button>
       </div>
       <div class="card-tags">
         <span class="tag tag-neutral">${bw.hand === 'left' ? 'Left-handed' : 'Right-handed'}</span>
@@ -824,6 +906,7 @@ function renderProfileScreen() {
           ? '<span class="tag tag-outline">Active</span>'
           : `<button class="btn btn-secondary" data-action="set-active-bowler" data-id="${bw.id}">Set active</button>`}
         <button class="btn btn-secondary" data-action="open-session-log" data-id="${bw.id}">Session log (${(bw.sessionLog || []).length})</button>
+        <button class="btn btn-secondary" data-action="goto-arsenal-filtered" data-id="${bw.id}">Arsenal (${state.arsenal.filter(b => b.ownerId === bw.id).length})</button>
       </div>
     </div>`).join('');
   return `
@@ -889,6 +972,7 @@ function renderPatternScreen() {
 
   return `
     <h4>Pattern &amp; condition</h4>
+    <div class="text-muted" style="font-size:12px;margin-top:-8.4px;margin-bottom:11.2px;">Scoring for ${activeBowler ? esc(activeBowler.name) : 'no bowler selected'} — speed affects the effective numbers below.</div>
     ${renderKosiImportCard()}
     <div class="card-kicker">Quick presets</div>
     <div class="preset-row">${presetRow}</div>
@@ -983,6 +1067,7 @@ function renderPatternScreen() {
 }
 
 function renderResultsScreen() {
+  const bowler = state.bowlers.find(b => b.id === state.activeBowlerId);
   const results = computeResults();
   const rows = results.map(ball => `
     <div class="card result-row" data-action="open-detail" data-id="${ball.id}">
@@ -991,12 +1076,32 @@ function renderResultsScreen() {
         <div class="card-title">${esc(ball.name)}</div>
         <span class="tag" style="background:${ball.bandBg};color:${ball.bandFg};margin-top:4px;">${ball.bandLabel}</span>
       </div>
-      <div class="result-total">${ball.total}</div>
+      ${renderMiniRadar(ball)}
     </div>`).join('');
+
+  const bowlerSelect = state.bowlers.length ? `
+    <select class="input" data-scope="root" data-field="activeBowlerId" data-parse="string">
+      ${state.bowlers.map(b => `<option value="${b.id}" ${b.id === state.activeBowlerId ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}
+    </select>` : `<div class="text-muted" style="font-size:13px;">No bowlers yet — add one from the menu.</div>`;
+
   return `
-    <h4>Ranked for this lane</h4>
-    <div class="text-muted" style="font-size:12px;margin-bottom:11.2px;">${esc(PT_LABELS[state.pattern.pattern_type] || state.pattern.pattern_type)} · ${esc(state.pattern.condition)}</div>
-    ${results.length === 0 ? '<div class="card empty-card">Add a ball to your arsenal to see how it scores here.</div>' : rows}
+    <div class="card context-card">
+      <div class="field">
+        <label>Bowler</label>
+        ${bowlerSelect}
+      </div>
+      <div class="field">
+        <label>Pattern</label>
+        <div class="context-pattern-row">
+          <span class="text-muted" style="font-size:13px;">${esc(patternSummary(state.pattern))} · ${esc(state.pattern.condition)}</span>
+          <button class="btn btn-ghost" data-action="goto-tab" data-tab="pattern">Change</button>
+        </div>
+      </div>
+    </div>
+    <h4>${bowler ? esc(bowler.name) + '’s arsenal, ranked' : 'Ranked'}</h4>
+    ${results.length === 0
+      ? `<div class="card empty-card">${bowler ? esc(bowler.name) + ' has' : 'This bowler has'} no balls yet — add one from the Arsenal page (menu).</div>`
+      : rows}
   `;
 }
 
@@ -1012,6 +1117,13 @@ function renderBallDialog() {
       <div class="field">
         <label>Name</label>
         <input class="input" type="text" value="${esc(d.name)}" placeholder="e.g. Vengeance" data-scope="ballForm" data-field="name" data-parse="string"/>
+      </div>
+      <div class="field">
+        <label>Owner</label>
+        <select class="input" data-scope="ballForm" data-field="ownerId" data-parse="stringOrNull">
+          <option value="" ${!d.ownerId ? 'selected' : ''}>Unassigned</option>
+          ${state.bowlers.map(b => `<option value="${b.id}" ${d.ownerId === b.id ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}
+        </select>
       </div>
       <div class="card-kicker">Core &amp; specs</div>
       <div class="field">
@@ -1187,7 +1299,7 @@ function renderSessionLogDialog() {
         <label>Ball</label>
         <select class="input" data-scope="sessionForm" data-field="ballId" data-parse="string">
           <option value="">Not specified</option>
-          ${state.arsenal.map(b => `<option value="${b.id}" ${f.ballId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}
+          ${state.arsenal.filter(b => b.ownerId === bowler.id).map(b => `<option value="${b.id}" ${f.ballId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}
         </select>
       </div>
       <div class="field">
@@ -1248,10 +1360,12 @@ function renderDetailDialog() {
   const results = computeResults();
   const ball = results.find(r => r.id === state.detailBallId);
   if (!ball) return '';
+  const bowler = state.bowlers.find(b => b.id === state.activeBowlerId);
   return `
   <div class="dialog-backdrop" data-action="close-detail">
     <div class="dialog" data-action="noop">
       <div class="dialog-title">${esc(ball.name)}</div>
+      <div class="text-muted" style="font-size:12px;margin-top:-8.4px;">Scored for ${bowler ? esc(bowler.name) : 'no bowler selected'} · ${esc(patternSummary(state.pattern))} · ${esc(state.pattern.condition)}</div>
       <div class="detail-total">
         <div class="num" style="color:${ball.bandFg};">${ball.total}</div>
         <span class="tag" style="background:${ball.bandBg};color:${ball.bandFg};margin-top:6px;">${ball.bandLabel}</span>
@@ -1284,17 +1398,55 @@ function renderDetailDialog() {
   </div>`;
 }
 
-function render() {
-  document.getElementById('pattern-type-tag').textContent = PT_LABELS[state.pattern.pattern_type] || state.pattern.pattern_type;
-  document.querySelectorAll('#tab-seg input[name="tab"]').forEach(el => { el.checked = el.value === state.screen; });
+function renderDeleteBowlerDialog() {
+  const id = state.confirmDeleteBowlerId;
+  if (!id) return '';
+  const bowler = state.bowlers.find(b => b.id === id);
+  if (!bowler) return '';
+  const ballCount = state.arsenal.filter(b => b.ownerId === id).length;
+  return `
+  <div class="dialog-backdrop" data-action="noop">
+    <div class="dialog" data-action="noop">
+      <div class="dialog-title">Remove ${esc(bowler.name)}?</div>
+      <div class="text-muted" style="font-size:13px;">
+        ${ballCount > 0
+          ? `${esc(bowler.name)} has ${ballCount} ball${ballCount === 1 ? '' : 's'} in the arsenal. What should happen to ${ballCount === 1 ? 'it' : 'them'}?`
+          : `${esc(bowler.name)} has no balls in the arsenal.`}
+      </div>
+      <div class="dialog-actions" style="flex-direction:column;align-items:stretch;">
+        <button class="btn btn-secondary menu-link" data-action="delete-bowler-keep-arsenal" data-id="${bowler.id}">Delete bowler only — keep their balls (marked Unassigned)</button>
+        <button class="btn btn-secondary menu-link" data-action="delete-bowler-cascade" data-id="${bowler.id}">Delete bowler and their arsenal</button>
+        <button class="btn btn-secondary menu-link" data-action="cancel-delete-bowler">Cancel</button>
+      </div>
+    </div>
+  </div>`;
+}
 
+function renderHamburgerMenu() {
+  if (!state.hamburgerOpen) return '';
+  return `
+  <div class="dialog-backdrop" data-action="close-hamburger">
+    <div class="dialog" data-action="noop">
+      <div class="dialog-title">Menu</div>
+      <button class="btn btn-secondary menu-link" data-action="goto-tab" data-tab="bowlers">Bowlers</button>
+      <button class="btn btn-secondary menu-link" data-action="goto-tab" data-tab="arsenal">Arsenal</button>
+      <button class="btn btn-secondary menu-link" data-action="goto-tab" data-tab="pattern">Patterns</button>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" data-action="close-hamburger">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function render() {
   const screenEl = document.getElementById('screen');
   if (state.screen === 'arsenal') screenEl.innerHTML = renderArsenalScreen();
-  else if (state.screen === 'profile') screenEl.innerHTML = renderProfileScreen();
+  else if (state.screen === 'bowlers') screenEl.innerHTML = renderProfileScreen();
   else if (state.screen === 'pattern') screenEl.innerHTML = renderPatternScreen();
   else screenEl.innerHTML = renderResultsScreen();
 
-  document.getElementById('dialogs').innerHTML = renderBallDialog() + renderBowlerDialog() + renderSessionLogDialog() + renderDetailDialog();
+  document.getElementById('dialogs').innerHTML = renderBallDialog() + renderBowlerDialog() + renderSessionLogDialog()
+    + renderDeleteBowlerDialog() + renderDetailDialog() + renderHamburgerMenu();
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,6 +1460,7 @@ function parseValue(el) {
   if (parse === 'floatOrEmpty') return raw === '' ? '' : parseFloat(raw);
   if (parse === 'bool') return raw === 'true';
   if (parse === 'checkbox') return el.checked;
+  if (parse === 'stringOrNull') return raw === '' ? null : raw;
   return raw;
 }
 
@@ -1383,8 +1536,12 @@ document.addEventListener('click', (e) => {
     case 'ball-form-cancel': closeBallForm(); break;
     case 'open-new-bowler': openNewBowlerForm(); break;
     case 'edit-bowler': openEditBowlerForm(id); break;
-    case 'delete-bowler': deleteBowler(id); break;
+    case 'confirm-delete-bowler': openDeleteBowlerConfirm(id); break;
+    case 'cancel-delete-bowler': closeDeleteBowlerConfirm(); break;
+    case 'delete-bowler-cascade': deleteBowlerCascade(id); break;
+    case 'delete-bowler-keep-arsenal': deleteBowlerKeepArsenal(id); break;
     case 'set-active-bowler': setActiveBowler(id); break;
+    case 'goto-arsenal-filtered': goToArsenalFiltered(id); break;
     case 'bowler-form-save': saveBowlerForm(); break;
     case 'bowler-form-cancel': closeBowlerForm(); break;
     case 'open-session-log': openSessionLog(id); break;
@@ -1406,11 +1563,10 @@ document.addEventListener('click', (e) => {
     }
     case 'kosi-apply': applyKosiImport(); break;
     case 'kosi-dismiss': dismissKosiImport(); break;
+    case 'toggle-hamburger': state.hamburgerOpen = !state.hamburgerOpen; render(); break;
+    case 'close-hamburger': state.hamburgerOpen = false; render(); break;
+    case 'goto-tab': state.hamburgerOpen = false; setScreen(el.dataset.tab); break;
   }
-});
-
-document.getElementById('tab-seg').addEventListener('change', (e) => {
-  if (e.target.name === 'tab') setScreen(e.target.value);
 });
 
 document.addEventListener('change', (e) => {
